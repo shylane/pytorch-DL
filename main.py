@@ -20,19 +20,6 @@ from models import *
 from utils import progress_bar,misclassified_images,gradcam
 
 
-class AlbumentationDataset(torchvision.datasets.CIFAR10):
-    def __init__(self, root="./data/", train=True, download=True, transform=None):
-        super().__init__(root=root, train=train, download=download, transform=transform)
-
-    def __getitem__(self, index):
-        image, label = self.data[index], self.targets[index]
-
-        if self.transform is not None:
-            transformed = self.transform(image=image)
-            image = transformed["image"]
-
-        return image, label
-
 def main():
     parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
     parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
@@ -216,3 +203,17 @@ def main():
 
     plt.tight_layout()
     plt.show()
+
+
+class AlbumentationDataset(torchvision.datasets.CIFAR10):
+    def __init__(self, root="./data/", train=True, download=True, transform=None):
+        super().__init__(root=root, train=train, download=download, transform=transform)
+
+    def __getitem__(self, index):
+        image, label = self.data[index], self.targets[index]
+
+        if self.transform is not None:
+            transformed = self.transform(image=image)
+            image = transformed["image"]
+
+        return image, label
