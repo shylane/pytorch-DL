@@ -2,24 +2,29 @@
     - get_mean_and_std: calculate the mean and std value of dataset.
     - msr_init: net parameter initialization.
     - progress_bar: progress bar mimic xlua.progress.
-    - misclassified_images: show given number of misclassfied_images.
-    - gradcam: show gradcam for an image
 '''
 import os
 import sys
 import time
-import math
+# import math
+from typing import Optional
 
 import torch.nn as nn
 import torch.nn.init as init
-import torchvision.transforms as transforms
+# import torchvision.transforms as transforms
 import numpy as np
 import torch
-import torchvision.models as models
-import torchvision.transforms.functional as FT
+# import torchvision.models as models
+import torch.nn.functional as F
+
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
+from pytorch_grad_cam.utils.image import show_cam_on_image
+import cv2
+import matplotlib.pyplot as plt
 
 
-def misclassified_images(net, testloader, device='cuda', num_images=10):
+def misclassified_images(net, testloader, classes, device='cuda', num_images=10, plot_file: Optional[str]="misclassified.png"):
     net.eval()
     misclassified_images = []
 
@@ -32,33 +37,103 @@ def misclassified_images(net, testloader, device='cuda', num_images=10):
             for i in incorrect:
                 if len(misclassified_images) < num_images:
                     misclassified_images.append((images[i], labels[i], predicted[i]))
+    
+    if plot_file is not None:
+        fig, axes = plt.subplots(2, 5, figsize=(15, 6))
+        axes = axes.flatten()
+        for i, (img, target, pred) in enumerate(misclassified_images):
+            image = img.cpu().numpy().transpose((1, 2, 0))  # Convert to HWC format
+            image = (image - image.min()) / (image.max() - image.min())  # Normalize to [0, 1]
+            axes[i].imshow(image)
+            axes[i].set_title(f'Target: {classes[target]}\nPredicted: {classes[pred]}\nPixel size: {image.shape[0]}x{image.shape[1]}')
+            axes[i].axis('off')
+        plt.tight_layout()
+        plt.show()
+        plt.savefig(plot_file)
 
     return misclassified_images
 
 def gradcam(model, input_image, target_class, device):
-    model.eval()
-    input_image = input_image.unsqueeze(0).to(device)
-    target_class = torch.tensor([target_class], device=device)
+    target_layers = [model.module.layer3[-1]]
+    input_tensor = input_image.unsqueeze(0).cpu()
+    image = (input_image - input_image.min()) / (input_image.max() - input_image.min())  # Normalize the image to [0, 1]
+    
+    # targets = target_class.unsqueeze(0).cpu()
+    # Construct the CAM object once, and then re-use it on many images:
+    cam = GradCAM(model=model, target_layers=target_layers)
 
-    output = model(input_image)
-    output = output.squeeze(0)
-    score = F.softmax(output, dim=0)[target_class]
+    # You can also use it within a with statement, to make sure it is freed,
+    # In case you need to re-create it inside an outer loop:
+    # with GradCAM(model=model, target_layers=target_layers) as cam:
+    #   ...
 
-    model.zero_grad()
-    score.backward(retain_graph=True)
+    # We have to specify the target we want to generate
+    # the Class Activation Maps for.
+    # If targets is None, the highest scoring category
+    # will be used for every image in the batch.
+    # Here we use ClassifierOutputTarget, but you can define your own custom targets
+    # That are, for example, combinations of categories, or specific outputs in a non standard model.
 
-    gradients = model.get_activation_grads()
-    pooled_gradients = torch.mean(gradients, dim=[0, 2, 3])
+    targets = [ClassifierOutputTarget(target_class)]
 
-    activations = model.get_activations(input_image).detach()
-    for i in range(activations.size(1)):
-        activations[:, i, :, :] *= pooled_gradients[i]
+    # You can also pass aug_smooth=True and eigen_smooth=True, to apply smoothing.
+    grayscale_cam = cam(input_tensor=input_tensor, targets=targets)
+    # In this example grayscale_cam has only one image in the batch:
+    grayscale_cam = grayscale_cam[0, :]
+    visualization = show_cam_on_image(np.float32(image.permute(1, 2, 0).detach().cpu().numpy()), grayscale_cam, use_rgb=True)
 
-    heatmap = torch.mean(activations, dim=1).squeeze()
-    heatmap = F.relu(heatmap)
-    heatmap /= torch.max(heatmap)
+    # You can also get the model outputs without having to re-inference
+    model_outputs = cam.outputs
 
-    return heatmap
+    # cam = np.uint8(255*grayscale_cam)
+    # cam = cv2.merge([cam, cam, cam])
+    # images = np.hstack((np.uint8(255*img), cam , cam_image))
+    # Image.fromarray(images)
+
+    return visualization, grayscale_cam, cam.outputs
+
+def plot_gradcam(misclassified, net, device, classes, plot_file='gradcam.png'):
+    fig, axes = plt.subplots(2, 5, figsize=(15, 6))
+    axes = axes.flatten()
+
+    for i, (img, target, pred) in enumerate(misclassified):
+        viz, gray, cout = gradcam(net, img, pred, device)
+        # img = img.permute(1, 2, 0).cpu().numpy()
+        # heatmap = heatmap.cpu().numpy()
+        # cam = np.uint8(255 * heatmap)
+        # heatmap = cv2.applyColorMap(cam, cv2.COLORMAP_JET)
+        # superimposed_img = heatmap * 0.4 + img
+        axes[i].imshow(viz)#(superimposed_img / np.max(superimposed_img))
+        axes[i].set_title(f'Target: {classes[target]}\nPredicted: {classes[pred]}')
+        axes[i].axis('off')
+
+    plt.tight_layout()
+    plt.show()
+    plt.savefig(plot_file)
+
+def resume_from_checkpoint(net):
+    #Load Checkpoint and return the best accuracy and epoch to start with to resume training
+    print('==> Resuming from checkpoint..')
+    script_dir = os.path.dirname(__file__)  # Get the script's directory
+    target_dir = os.path.join(script_dir, 'checkpoint')  # Join the path with the directory name
+    assert os.path.exists(target_dir), 'Error: no checkpoint directory found!'
+    checkpoint = torch.load(os.path.join(target_dir,'ckpt.pth'))
+    net.load_state_dict(checkpoint['net'])
+    best_acc = checkpoint['acc']
+    start_epoch = checkpoint['epoch']
+    return best_acc, start_epoch
+
+def plot_loss_curves(train_losses,test_losses,plot_file='LossCurve.png'):
+    # Plot loss curves
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_losses, label='Training Loss')
+    plt.plot(test_losses, label='Test Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Loss Curves')
+    plt.legend()
+    plt.show()
+    plt.savefig(plot_file)
 
 def get_mean_and_std(dataset):
     '''Compute the mean and std value of dataset.'''
