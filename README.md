@@ -4,11 +4,10 @@
 ## Prerequisites
 - Python 3.10+
 - Pytorch 2.2.1+
-- pytorch-grad-cam 1.5.0
 
 ## Training
 ```
-# Ensure installing grad-cam
+# Ensure grad-cam is installed
 %pip install grad-cam
 
 # Start training with: 

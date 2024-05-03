@@ -55,9 +55,9 @@ def transform_data(dataset,train_ratio, batch_size, workers):
     # Define transformations; split the dataset into train and test; return the dataset loaders
     print('==> Preparing data..')
     transform_train = A.Compose([
-        A.RandomCrop(32, 32),
+        A.RandomCrop(32, 32, p=4),
         A.HorizontalFlip(),
-        A.CoarseDropout(num_holes_range=(1, 1), max_height=16, max_width=16, fill_value=0.4914*255),
+        A.CoarseDropout(max_holes=1, min_holes=1, max_height=16, max_width=16, fill_value=0.4914*255),
         A.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ToTensorV2()
     ])
